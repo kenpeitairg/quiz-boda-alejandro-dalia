@@ -1,1 +1,758 @@
-# quiz-boda-alejandro-dalia
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boda: ¡Gana tu Asiento!</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // --- CONFIGURACIÓN DE TAILWIND ---
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#9A403A', // Tono de rojo vino/terracota
+                        'secondary': '#FCE7F3', // Rosa pálido
+                        'accent': '#6EE7B7', // Verde menta para resaltar
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        serif: ['Playfair Display', 'serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* --- ESTILOS CSS --- */
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;600;700&display=swap');
+        
+        body {
+            background: linear-gradient(135deg, #fce7f3 0%, #fef3c7 100%);
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+        }
+
+        /* Estilo para el asiento propio (VERDE) */
+        .my-seat {
+            background-color: #34D399 !important; /* Verde más oscuro */
+            color: white !important;
+            border-color: #059669 !important;
+            box-shadow: 0 4px 10px rgba(52, 211, 153, 0.5);
+            animation: pulse-green 1.5s infinite;
+        }
+
+        /* Asiento ocupado (ROJO) */
+        .seat-reserved {
+            background-color: #EF4444 !important; /* Rojo */
+            color: white !important;
+            cursor: not-allowed !important;
+            opacity: 0.8;
+        }
+
+        /* Asiento disponible (GRIS) */
+        .seat-available {
+            background-color: #F3F4F6 !important; /* Gris suave */
+            color: #4B5563 !important;
+            border-color: #D1D5DB !important;
+        }
+
+        /* Asiento con puntaje insuficiente (GRIS OSCURO) */
+        .seat-disabled {
+            background-color: #9CA3AF !important; /* Gris oscuro */
+            color: white !important;
+            cursor: not-allowed !important;
+            opacity: 0.6;
+        }
+
+        /* Animación para el botón propio */
+        @keyframes pulse-green {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+        }
+
+        /* Estilo para botones principales */
+        .btn-primary {
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Estilo para las sillas individuales */
+        .seat-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 45px;
+            height: 45px;
+            border-radius: 8px;
+            margin: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            transition: all 0.1s;
+        }
+        .seat-item:not([disabled]):hover {
+            transform: scale(1.1);
+            z-index: 10;
+        }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, runTransaction, query, where, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        setLogLevel('Debug');
+
+       const firebaseConfig = {
+  apiKey: "AIzaSyAt4tpyHM... (el tuyo)",
+  authDomain: "boda-alejandro-dalia.firebaseapp.com",
+  projectId: "boda-alejandro-dalia",
+  storageBucket: "boda-alejandro-dalia.firebasestorage.app",
+  messagingSenderId: "597236581727",
+  appId: "1:597236581727:web:04a0833cde81323349e2ea",
+  measurementId: "G-GTQDFSVG3W"
+};
+        
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+       
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let currentUserId = null;
+        let userDisplayName = "Invitado";
+        let userScore = 0;
+        let userHasAnswered = false;
+        let userSeatAssignment = null; 
+
+        const STATE = {
+            LOADING: 'loading',
+            LOGIN: 'login',
+            QUIZ: 'quiz',
+            RESULTS: 'results',
+            SEATING: 'seating'
+        };
+
+        let currentState = STATE.LOADING;
+
+        let seatingPlanMap = {}; 
+
+
+        const questions = [
+            { id: 1, question: "Cuantas nacionalidades tiene Alejandro?", options: [{ text: "1", isCorrect: false }, { text: "2", isCorrect: false }, { text: "3", isCorrect: true }, { text: "4", isCorrect: false }] },
+            { id: 2, question: "Como prefiere Alejandro que lo llamen?", options: [{ text: "Alejandro", isCorrect: false }, { text: "Matias", isCorrect: false }, { text: "Bilcich", isCorrect: false }, { text: "Cualquiera", isCorrect: true }] },
+            { id: 3, question: "Donde a Alejandro le gustó trabajar más", options: [{ text: "Ejercito", isCorrect: false }, { text: "Policía", isCorrect: true }, { text: "Fig", isCorrect: false }, { text: "Rijksmuseum", isCorrect: false }] },
+            { id: 4, question: "Donde hablaron por primera vez Dalia y Alejandro?", options: [{ text: "Marvlvs", isCorrect: false }, { text: "Kašjuni", isCorrect: false }, { text: "Whatsapp", isCorrect: true }, { text: "Riba", isCorrect: false }] },
+            { id: 5, question: "Cual es la bebida preferida de Alejandro?", options: [{ text: "Cerveza", isCorrect: false }, { text: "Fernet con coca", isCorrect: true }, { text: "Vino Malbec", isCorrect: false }, { text: "Expreso Martini", isCorrect: false }] },
+            { id: 6, question: "Cual es el cumple de Alejandro?", options: [{ text: "6 de mayo", isCorrect: false }, { text: "8 de mayo", isCorrect: true }, { text: "10 de mayo", isCorrect: false }, { text: "12 de mayo", isCorrect: false }] },
+            { id: 7, question: "Cual droga no ha tomado Alejandro?", options: [{ text: "Porro", isCorrect: false }, { text: "Hongo", isCorrect: false }, { text: "Ayahuasca", isCorrect: false }, { text: "Ketamina", isCorrect: true }] },
+            { id: 8, question: "Cual es el gusto de música preferido de Alejandro?", options: [{ text: "Metal", isCorrect: false }, { text: "Tecno", isCorrect: false }, { text: "Dubstep", isCorrect: false }, { text: "Cumbia", isCorrect: true }] },
+            { id: 9, question: "Como se llama la perra de Alejandro?", options: [{ text: "Doris", isCorrect: false }, { text: "Luci", isCorrect: false }, { text: "Juliana", isCorrect: false }, { text: "Kalashnikova", isCorrect: true }] },
+            { id: 10, question: "Cuantos perros tiene la familia de Alejandro?", options: [{ text: "4", isCorrect: true }, { text: "5", isCorrect: false }, { text: "6", isCorrect: false }, { text: "7", isCorrect: false }] },
+        ];
+        
+
+        const SEATING_MAP = {
+
+            TIER1: { minScore: 8, seats: [...Array(5)].map((_, i) => `L${String(i+1).padStart(2, '0')}`).concat([...Array(5)].map((_, i) => `R${String(i+1).padStart(2, '0')}`)) },
+
+            TIER2: { minScore: 5, seats: [...Array(10)].map((_, i) => `L${String(i+6).padStart(2, '0')}`).concat([...Array(10)].map((_, i) => `R${String(i+6).padStart(2, '0')}`)) },
+     
+            TIER3: { minScore: 3, seats: [...Array(15)].map((_, i) => `L${String(i+16).padStart(2, '0')}`).concat([...Array(15)].map((_, i) => `R${String(i+16).padStart(2, '0')}`)) },
+   
+            TIER4: { minScore: 0, seats: [] },
+        };
+
+        const ALL_SEAT_IDS = [
+            ...SEATING_MAP.TIER1.seats,
+            ...SEATING_MAP.TIER2.seats,
+            ...SEATING_MAP.TIER3.seats,
+        ];
+        
+        function getMinScore(seatId) {
+            if (SEATING_MAP.TIER1.seats.includes(seatId)) return SEATING_MAP.TIER1.minScore;
+            if (SEATING_MAP.TIER2.seats.includes(seatId)) return SEATING_MAP.TIER2.minScore;
+            if (SEATING_MAP.TIER3.seats.includes(seatId)) return SEATING_MAP.TIER3.minScore;
+            return 0;
+        }
+ 
+        const getScoresCollection = (db) => collection(db, `/artifacts/${appId}/public/data/quizScores`);
+        const getSeatsCollection = (db) => collection(db, `/artifacts/${appId}/public/data/seats`); 
+
+        async function initializeAppAndAuth() {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                        await loadUserData(); 
+                        await initializeSeatingPlan(); 
+                        subscribeToSeatingPlan(); 
+                        renderApp(); 
+                    } else {
+                       
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth); 
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                document.getElementById('app-container').innerHTML = `<div class="p-6 bg-red-100 text-red-700 rounded-lg">Error de inicialización: ${error.message}. Si está ejecutando localmente, asegúrese de tener acceso a Internet.</div>`;
+            }
+        }
+
+        
+        async function loadUserData() {
+            const userDocRef = doc(db, getScoresCollection(db).path, currentUserId);
+            const docSnap = await getDoc(userDocRef);
+
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                userDisplayName = data.name;
+                userScore = data.score;
+                userHasAnswered = true;
+                userSeatAssignment = data.seatId || null;
+                currentState = STATE.SEATING; // Si ya contestó, llevarlo directo a los asientos
+            } else {
+                currentState = STATE.LOGIN; // Si es nuevo, mostrar login
+            }
+        }
+
+        // --- Lógica de la Base de Datos (Asientos Individuales) ---
+
+        /**
+         * Inicializa los 60 documentos de asientos si no existen.
+         * Usa writeBatch para una operación masiva eficiente.
+         */
+        async function initializeSeatingPlan() {
+            try {
+                
+                const seatDocs = await getDocs(query(getSeatsCollection(db)));
+                
+                if (seatDocs.empty) {
+                    console.log("Inicializando 60 asientos en Firestore...");
+                    const batch = writeBatch(db); 
+                    
+                    ALL_SEAT_IDS.forEach(seatId => {
+                        const seatRef = doc(getSeatsCollection(db), seatId);
+                        batch.set(seatRef, {
+                            id: seatId,
+                            minScore: getMinScore(seatId),
+                            reservedBy: null, // ID del usuario que reserva
+                            name: null        // Nombre del usuario que reserva
+                        });
+                    });
+                    
+                    await batch.commit();
+                    console.log("60 asientos inicializados.");
+                }
+            } catch (e) {
+                console.error("Error inicializando asientos:", e);
+                if (firebaseConfig === PLACEHOLDER_FIREBASE_CONFIG) {
+                     console.warn("ADVERTENCIA: Fallo al conectar a Firestore. Si corre localmente sin su propia configuración de Firebase, la persistencia NO funcionará.");
+                }
+            }
+        }
+
+        function subscribeToSeatingPlan() {
+            return onSnapshot(getSeatsCollection(db), (snapshot) => {
+                const newSeatingPlanMap = {};
+                let userSeatFound = null;
+
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    newSeatingPlanMap[doc.id] = data;
+                    if (data.reservedBy === currentUserId) {
+                        userSeatFound = doc.id; // Rastrear si el usuario actual tiene un asiento
+                    }
+                });
+                
+                seatingPlanMap = newSeatingPlanMap;
+                userSeatAssignment = userSeatFound;
+                
+                // Si el usuario está viendo los asientos, re-renderizar para mostrar el cambio
+                if (currentState === STATE.SEATING || currentState === STATE.RESULTS) {
+                    renderApp(); 
+                }
+            }, (error) => {
+                console.error("Error al escuchar el plan de asientos:", error);
+            });
+        }
+
+
+     
+        async function reserveSeat(seatId) {
+            const seatData = seatingPlanMap[seatId];
+            
+           
+            if (!seatData || userScore < seatData.minScore) {
+                showModal("Error", "Tu puntaje no es suficiente para este asiento o el asiento no es válido.");
+                return;
+            }
+            if (seatData.reservedBy && seatData.reservedBy !== currentUserId) {
+                showModal("Error", "Este asiento acaba de ser reservado por otro invitado.");
+                return;
+            }
+
+   
+            document.querySelectorAll('.seat-item').forEach(btn => btn.disabled = true);
+            
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const newSeatRef = doc(getSeatsCollection(db), seatId);
+                    const newSeatDoc = await transaction.get(newSeatRef);
+                    const newSeatData = newSeatDoc.data();
+
+                    // Doble verificación dentro de la transacción
+                    if (newSeatData.reservedBy && newSeatData.reservedBy !== currentUserId) {
+                        throw "Asiento ya ocupado.";
+                    }
+                    
+                    // 1. Quitar reserva del asiento anterior (si el usuario cambia de asiento)
+                    if (userSeatAssignment && userSeatAssignment !== seatId) {
+                        const oldSeatRef = doc(getSeatsCollection(db), userSeatAssignment);
+                        transaction.update(oldSeatRef, { reservedBy: null, name: null });
+                    }
+                    
+                    // 2. Reservar el nuevo asiento
+                    transaction.update(newSeatRef, { 
+                        reservedBy: currentUserId, 
+                        name: userDisplayName 
+                    });
+                    
+                    // 3. Actualizar el documento del usuario (guardar su elección)
+                    const userDocRef = doc(db, getScoresCollection(db).path, currentUserId);
+                    transaction.update(userDocRef, { seatId: seatId });
+                    
+                    userSeatAssignment = seatId; // Actualizar estado local
+                });
+
+                showModal("¡Reserva Exitosa!", `Has reservado el asiento: ${seatId}. ¡Felicidades!`);
+                renderApp(); 
+            } catch (error) {
+                console.error("Error en la transacción de reserva:", error);
+                const errorMessage = typeof error === 'string' ? error : "Ocurrió un error inesperado al intentar reservar.";
+                showModal("Error de Reserva", errorMessage);
+            } finally {
+                
+                document.querySelectorAll('.seat-item').forEach(btn => btn.disabled = false);
+            }
+        }
+
+
+        // --- Lógica del Cuestionario y Renderizado ---
+
+        let userAnswers = {}; // Almacena las respuestas seleccionadas temporalmente
+
+        
+        function selectAnswer(questionId, optionIndex) {
+            userAnswers[questionId] = optionIndex;
+           
+            document.querySelectorAll(`#q${questionId} button`).forEach(btn => {
+                btn.classList.remove('bg-primary/20', 'ring-2', 'ring-primary');
+            });
+            document.getElementById(`q${questionId}-opt${optionIndex}`).classList.add('bg-primary/20', 'ring-2', 'ring-primary');
+        }
+
+        // Envía el cuestionario, calcula el puntaje y lo guarda en Firestore
+        async function submitQuiz() {
+            if (Object.keys(userAnswers).length !== questions.length) {
+                showModal("Error", "Por favor, responde todas las preguntas antes de enviar.");
+                return;
+            }
+
+            let calculatedScore = 0;
+            const answersToSave = {};
+
+            // Calcular puntaje
+            questions.forEach(q => {
+                const selectedIndex = userAnswers[q.id];
+                answersToSave[q.id] = selectedIndex;
+
+                if (q.options[selectedIndex].isCorrect) {
+                    calculatedScore += 1;
+                }
+            });
+
+            
+            try {
+                const userDocRef = doc(db, getScoresCollection(db).path, currentUserId);
+                await setDoc(userDocRef, {
+                    userId: currentUserId,
+                    name: userDisplayName,
+                    score: calculatedScore,
+                    timestamp: new Date().toISOString(),
+                    answers: answersToSave,
+                    seatId: userSeatAssignment 
+                });
+
+                userScore = calculatedScore;
+                userHasAnswered = true;
+                currentState = STATE.RESULTS;
+                renderApp();
+            } catch (e) {
+                console.error("Error al guardar el puntaje:", e);
+                showModal("Error", "No se pudo guardar tu puntaje. Por favor, inténtalo de nuevo.");
+            }
+        }
+
+        // --- Funciones de Renderizado (HTML dinámico) ---
+
+        function renderLogin() {
+            return `
+                <div class="max-w-md mx-auto p-8 bg-white rounded-xl shadow-2xl">
+                    <h2 class="text-3xl font-serif font-bold text-center text-primary mb-4">Bienvenido a la Boda de [Tu Nombre]</h2>
+                    <p class="text-center text-gray-600 mb-8">Antes de empezar, dinos tu nombre para identificarte en el cuestionario y la reserva de asientos.</p>
+                    <input type="text" id="nameInput" placeholder="Tu Nombre Completo" class="w-full p-3 border-2 border-secondary rounded-lg focus:border-primary focus:ring-primary mb-6" />
+                    <button id="startQuizBtn" class="btn-primary w-full bg-primary text-white font-bold py-3 px-4 rounded-lg hover:bg-primary/90 transition duration-300">
+                        ¡Empezar Cuestionario!
+                    </button>
+                    ${(firebaseConfig === PLACEHOLDER_FIREBASE_CONFIG) ? 
+                        `<div class="mt-4 p-3 text-sm bg-yellow-100 text-yellow-700 rounded-lg">
+                            Modo Local de Prueba: La persistencia de datos (guardar asientos) es limitada.
+                        </div>` : ''}
+                </div>
+            `;
+        }
+
+        function renderQuiz() {
+            let quizHTML = `
+                <div class="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-2xl">
+                    <h2 class="text-3xl font-serif font-bold text-center text-primary mb-2">Quiz de Boda</h2>
+                    <p class="text-center text-gray-600 mb-8">¡Pon a prueba cuánto conoces a la pareja! Cada respuesta correcta te da un punto y te acerca a un asiento de honor. (Total: ${questions.length} preguntas)</p>
+                    <form id="quizForm" class="space-y-8">
+            `;
+            
+            questions.forEach((q, qIndex) => {
+                quizHTML += `
+                    <div id="q${q.id}" class="p-5 border-b border-secondary last:border-b-0">
+                        <p class="text-xl font-semibold mb-4 text-gray-800">${qIndex + 1}. ${q.question}</p>
+                        <div class="space-y-3">
+                `;
+                q.options.forEach((opt, oIndex) => {
+                    quizHTML += `
+                        <button type="button" 
+                                id="q${q.id}-opt${oIndex}"
+                                onclick="window.app.selectAnswer(${q.id}, ${oIndex})"
+                                class="w-full text-left p-3 border border-gray-300 rounded-lg transition duration-150 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary/50">
+                            ${opt.text}
+                        </button>
+                    `;
+                });
+                quizHTML += `
+                        </div>
+                    </div>
+                `;
+            });
+
+            quizHTML += `
+                    </form>
+                    <div class="mt-8 pt-6 border-t border-gray-200">
+                        <button id="submitQuizBtn" class="btn-primary w-full bg-accent text-white font-bold py-4 px-4 rounded-lg hover:bg-accent/90">
+                            Enviar Respuestas y Ver Mi Puntaje
+                        </button>
+                    </div>
+                </div>
+            `;
+            return quizHTML;
+        }
+
+        function renderResults() {
+            return `
+                <div class="max-w-xl mx-auto p-8 bg-white rounded-xl shadow-2xl text-center">
+                    <h2 class="text-4xl font-serif font-bold text-primary mb-4">¡Puntaje Obtenido!</h2>
+                    <p class="text-gray-600 text-lg mb-2">Gracias por participar, <span class="font-semibold text-primary">${userDisplayName}</span>.</p>
+                    <div class="my-8">
+                        <p class="text-5xl font-extrabold text-accent">${userScore}/${questions.length}</p>
+                        <p class="text-gray-500 mt-2">respuestas correctas</p>
+                    </div>
+
+                    <div class="p-4 bg-secondary/50 rounded-lg mb-8">
+                        <p class="font-semibold text-lg text-primary">Tu puntaje te da acceso a:</p>
+                        <p class="text-gray-700">Elección de Asiento Prioritaria, basada en tu puntaje.</p>
+                    </div>
+
+                    <button id="goToSeatingBtn" class="btn-primary w-full bg-primary text-white font-bold py-3 px-4 rounded-lg hover:bg-primary/90 transition duration-300">
+                        Ir al Mapa de Asientos
+                    </button>
+                </div>
+            `;
+        }
+
+        
+        function renderSeatGroup(isLeft) {
+           
+            const leftSeats = ALL_SEAT_IDS.filter(id => id.startsWith('L'));
+            const rightSeats = ALL_SEAT_IDS.filter(id => id.startsWith('R'));
+            
+            const totalSeats = isLeft ? leftSeats : rightSeats;
+            
+            // Definición de las filas (Tiers)
+            const rowSeatsDefinition = [
+                totalSeats.slice(0, 5),    // TIER 1 (L/R01-L/R05)
+                totalSeats.slice(5, 15),   // TIER 2 (L/R06-L/R15)
+                totalSeats.slice(15, 30)   // TIER 3 (L/R16-L/R30)
+            ];
+
+           
+            rowSeatsDefinition.reverse(); 
+
+            let rowsHTML = '';
+            
+            rowSeatsDefinition.forEach((rowSeats, index) => {
+                const rowId = rowSeatsDefinition.length - index; // 3, 2, 1
+                let currentTier = SEATING_MAP.TIER3; 
+                if (rowId === 3) currentTier = SEATING_MAP.TIER1;
+                else if (rowId === 2) currentTier = SEATING_MAP.TIER2;
+                
+                let rowButtonsHTML = '';
+                rowSeats.forEach(seatId => {
+                    const seat = seatingPlanMap[seatId];
+                    if (!seat) return; 
+                    
+                    const isReserved = seat.reservedBy !== null;
+                    const isMine = seat.reservedBy === currentUserId;
+                    const scoreMet = userScore >= seat.minScore;
+
+                    let classes = 'seat-item';
+                    let isDisabled = isReserved && !isMine;
+                    let title = `Asiento ${seatId} | Min: ${seat.minScore} Pts`;
+
+                   
+                    if (isMine) {
+                        classes += ' my-seat';
+                        title = `TU ASIENTO RESERVADO (${seatId})`;
+                        isDisabled = false;
+                    } else if (isReserved) {
+                        classes += ' seat-reserved';
+                        title = `OCUPADO (${seatId}) - ${seat.name}`;
+                        isDisabled = true;
+                    } else if (!scoreMet) {
+                        classes += ' seat-disabled';
+                        title += ` | PUNTAJE INSUFICIENTE (Min: ${seat.minScore})`;
+                        isDisabled = true;
+                    } else {
+                        classes += ' seat-available hover:shadow-xl';
+                        isDisabled = false;
+                    }
+
+                    rowButtonsHTML += `
+                        <button 
+                            class="${classes} border text-xs" 
+                            title="${title}"
+                            ${isDisabled ? 'disabled' : ''}
+                            onclick="window.app.reserveSeat('${seatId}')"
+                        >
+                            ${seatId}
+                        </button>
+                    `;
+                });
+
+                rowsHTML += `
+                    <div class="w-full text-center my-3 p-2 bg-gray-50 rounded-md shadow-inner">
+                        <p class="text-xs font-semibold text-gray-700 mb-1">Nivel ${rowId} (Min: ${currentTier.minScore} Pts)</p>
+                        <div class="flex flex-wrap justify-center">
+                            ${rowButtonsHTML}
+                        </div>
+                    </div>
+                `;
+            });
+
+
+            return `
+                <div class="flex flex-col items-center p-3 rounded-xl bg-white shadow-lg h-full">
+                    <h4 class="font-serif text-lg font-bold mb-2 text-primary">${isLeft ? 'Lado Izquierdo' : 'Lado Derecho'} (30 Sillas)</h4>
+                    
+                    <!-- Sillas organizadas por Tiers (simulando filas) -->
+                    <div class="w-full">
+                        <p class="text-center font-bold text-sm text-green-700 mt-2 mb-1">Frente (Mejor Puntaje)</p>
+                        ${rowsHTML}
+                        <p class="text-center font-bold text-sm text-red-700 mt-2">Fondo (Peor Puntaje)</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Renderiza la vista principal de asientos
+        function renderSeating() {
+            return `
+                <div class="max-w-7xl mx-auto p-6 bg-white rounded-xl shadow-2xl">
+                    <h2 class="text-3xl font-serif font-bold text-center text-primary mb-2">Mapa de Asientos Personalizado</h2>
+                    <p class="text-center text-gray-600 mb-8">Tu puntaje: <span class="font-bold text-accent">${userScore}/${questions.length}</span>. Los asientos más cercanos al frente requieren mayor puntaje.</p>
+
+                    <!-- Leyenda de Colores y Puntuaciones -->
+                    <div class="p-4 bg-secondary/50 rounded-lg mb-8 shadow-inner">
+                        <h4 class="font-bold text-primary mb-2 text-center">Leyenda</h4>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm text-gray-700">
+                            <span class="flex items-center justify-center">
+                                <span class="w-4 h-4 rounded-full bg-gray-100 border border-gray-400 mr-2"></span> Disponible
+                            </span>
+                            <span class="flex items-center justify-center">
+                                <span class="w-4 h-4 rounded-full bg-red-700 mr-2"></span> Ocupado (Rojo)
+                            </span>
+                            <span class="flex items-center justify-center">
+                                <span class="w-4 h-4 rounded-full bg-green-500 mr-2"></span> Tu Asiento (Verde)
+                            </span>
+                            <span class="flex items-center justify-center">
+                                <span class="w-4 h-4 rounded-full bg-gray-400 mr-2"></span> Pts Insuficientes
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Visualización del Salón -->
+                    <div class="text-center mb-6">
+                        <div class="inline-block px-8 py-3 bg-primary text-white font-serif text-xl rounded-t-lg shadow-xl">
+                            MESA DE HONOR / NOVIOS
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <!-- Lado Izquierdo (L01-L30) -->
+                        ${renderSeatGroup(true)}
+                        
+                        <!-- Lado Derecho (R01-R30) -->
+                        ${renderSeatGroup(false)}
+                    </div>
+                    
+                    <div class="mt-10 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <p class="text-center text-sm text-gray-500">Tu ID de Usuario (Compártelo si tienes un problema con la reserva): <span class="font-mono text-xs text-gray-700">${currentUserId}</span></p>
+                        <p class="text-center text-xs text-gray-500">Tu Nombre: ${userDisplayName}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        
+        function renderApp() {
+            const container = document.getElementById('app-container');
+            if (!container) return;
+
+          
+            container.innerHTML = '';
+            
+            let htmlContent;
+
+            switch (currentState) {
+                case STATE.LOADING:
+                    htmlContent = `<div class="text-center p-12"><div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div><p class="mt-4 text-gray-600">Cargando...</p></div>`;
+                    break;
+                case STATE.LOGIN:
+                    htmlContent = renderLogin();
+                    break;
+                case STATE.QUIZ:
+                    htmlContent = renderQuiz();
+                    break;
+                case STATE.RESULTS:
+                    htmlContent = renderResults();
+                    break;
+                case STATE.SEATING:
+                    htmlContent = renderSeating();
+                    break;
+                default:
+                    htmlContent = `<div class="text-center p-12 text-red-500">Estado desconocido.</div>`;
+            }
+
+            container.innerHTML = htmlContent;
+
+           
+            if (currentState === STATE.LOGIN) {
+                document.getElementById('startQuizBtn').addEventListener('click', handleLogin);
+            } else if (currentState === STATE.QUIZ) {
+                document.getElementById('submitQuizBtn').addEventListener('click', submitQuiz);
+            } else if (currentState === STATE.RESULTS) {
+                document.getElementById('goToSeatingBtn').addEventListener('click', () => {
+                    currentState = STATE.SEATING;
+                    renderApp();
+                });
+            }
+        }
+
+        // botón de Login
+        async function handleLogin() {
+            const nameInput = document.getElementById('nameInput');
+            const name = nameInput.value.trim();
+
+            if (!name) {
+                showModal("Atención", "Por favor, ingresa tu nombre para continuar.");
+                return;
+            }
+            if (name.length > 50) {
+                 showModal("Atención", "El nombre es demasiado largo.");
+                 return;
+            }
+
+            userDisplayName = name;
+            currentState = STATE.QUIZ;
+            renderApp();
+        }
+
+        // --- Modal 
+        function showModal(title, message) {
+            const modal = document.getElementById('custom-modal');
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = message;
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('custom-modal').classList.add('hidden');
+        }
+
+       
+        window.onload = function() {
+          
+            window.app = {
+                selectAnswer,
+                reserveSeat
+            };
+            
+         
+            document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+
+          
+            initializeAppAndAuth();
+        };
+
+       
+        window.app = {
+            selectAnswer,
+            reserveSeat
+        };
+
+    </script>
+</head>
+<body class="p-4 sm:p-8 flex items-center justify-center">
+
+    
+    <div id="app-container" class="w-full max-w-7xl">
+        <!-- renderizado por JavaScript -->
+    </div>
+
+    
+    <div id="custom-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm">
+            <h3 id="modal-title" class="text-xl font-serif font-bold text-primary mb-3"></h3>
+            <p id="modal-message" class="text-gray-700 mb-6"></p>
+            <button id="modal-close-btn" class="w-full bg-primary text-white font-bold py-2 rounded-lg hover:bg-primary/90 transition duration-300">
+                Aceptar
+            </button>
+        </div>
+    </div>
+
+</body>
+</html>
+
+
